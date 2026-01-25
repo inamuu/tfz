@@ -32,6 +32,15 @@ Notes:
 - Selecting `all` ignores any other target selection and runs without `-target`.
 - If nothing is selected, `all` is chosen by default.
 
+## Screenshots
+Main
+
+<img width="835" height="231" alt="Image" src="https://github.com/user-attachments/assets/98cd9df4-1ed1-4f9a-a765-5157bcfe17d4" />
+
+Filter (after typing)
+
+<img width="814" height="109" alt="Image" src="https://github.com/user-attachments/assets/73476a2f-481a-4842-965a-3677d83191d6" />
+
 ## Development
 ```sh
 go run .
