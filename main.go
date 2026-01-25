@@ -41,11 +41,16 @@ type model struct {
 
 var (
 	titleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2")).Bold(true)
-	cursorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#8BE9FD")).Bold(true)
-	checkedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#50FA7B")).Bold(true)
+	cursorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Bold(true)
+	checkedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF79C6")).Bold(true)
 	itemStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2"))
-	noteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9"))
-	filterStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF79C6")).Bold(true)
+	noteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#6272A4"))
+	filterStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#BD93F9")).Bold(true)
+	sectionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF79C6")).Bold(true)
+	headerBar    = lipgloss.NewStyle().Foreground(lipgloss.Color("#F8F8F2")).Background(lipgloss.Color("#44475A"))
+	headerTitle  = headerBar.Copy().Bold(true)
+	headerMeta   = headerBar.Copy().Foreground(lipgloss.Color("#BD93F9")).Bold(true)
+	activeStyle  = lipgloss.NewStyle().Background(lipgloss.Color("#3B3F52"))
 )
 
 func (m model) Init() tea.Cmd {
@@ -135,9 +140,8 @@ func (m model) View() string {
 func (m model) viewTargets() string {
 	var b strings.Builder
 	inner := m.innerWidth()
-	writeWrapped(&b, titleStyle, "Select targets", inner)
-	writeWrapped(&b, noteStyle, "Type: filter, Space: toggle, Enter: confirm, q: quit", inner)
-	writeWrapped(&b, filterStyle, fmt.Sprintf("Filter: %s", m.filter), inner)
+	writeHeader(&b, inner, "TARGET SELECTOR")
+	writeWrapped(&b, filterStyle, fmt.Sprintf("FILTER: %s", m.filter), inner)
 	b.WriteString("\n")
 	indexes := m.filtered
 	if len(indexes) == 0 {
@@ -170,11 +174,18 @@ func (m model) viewTargets() string {
 		for li, line := range labelLines {
 			if li == 0 {
 				out := fmt.Sprintf("%s %s %s", cursorStyled, checkStyled, itemStyle.Render(line))
+				if m.cursor == i {
+					out = activeStyle.Render(out)
+				}
 				b.WriteString(out + "\n")
 				continue
 			}
 			indent := strings.Repeat(" ", prefixLen)
-			b.WriteString(indent + itemStyle.Render(line) + "\n")
+			out := indent + itemStyle.Render(line)
+			if m.cursor == i {
+				out = activeStyle.Render(out)
+			}
+			b.WriteString(out + "\n")
 		}
 	}
 	if m.note != "" {
@@ -187,8 +198,7 @@ func (m model) viewTargets() string {
 func (m model) viewAction() string {
 	var b strings.Builder
 	inner := m.innerWidth()
-	writeWrapped(&b, titleStyle, "Select action", inner)
-	writeWrapped(&b, noteStyle, "Enter: run, q: quit", inner)
+	writeHeader(&b, inner, "ACTION SELECTOR")
 	b.WriteString("\n")
 	for i, item := range actions {
 		cursorPlain := " "
@@ -207,11 +217,18 @@ func (m model) viewAction() string {
 		for li, line := range labelLines {
 			if li == 0 {
 				out := fmt.Sprintf("%s %s", cursorStyled, itemStyle.Render(line))
+				if m.actionCursor == i {
+					out = activeStyle.Render(out)
+				}
 				b.WriteString(out + "\n")
 				continue
 			}
 			indent := strings.Repeat(" ", prefixLen)
-			b.WriteString(indent + itemStyle.Render(line) + "\n")
+			out := indent + itemStyle.Render(line)
+			if m.actionCursor == i {
+				out = activeStyle.Render(out)
+			}
+			b.WriteString(out + "\n")
 		}
 	}
 	return b.String()
@@ -311,6 +328,38 @@ func wrapLines(text string, width int) []string {
 		out = append(out, string(runes))
 	}
 	return out
+}
+
+func makeLine(width int, ch byte) string {
+	if width <= 0 {
+		return ""
+	}
+	return strings.Repeat(string(ch), width)
+}
+
+func writeHeader(b *strings.Builder, width int, subtitle string) {
+	if width <= 0 {
+		writeWrapped(b, headerTitle, " TFZ ", width)
+		writeWrapped(b, sectionStyle, subtitle, width)
+		return
+	}
+	left := " TFZ "
+	right := " " + subtitle + " "
+	leftLen := len([]rune(left))
+	rightLen := len([]rune(right))
+	fill := width - leftLen - rightLen
+	if fill < 0 {
+		b.WriteString(headerTitle.Render(left))
+		b.WriteString(headerMeta.Render(right) + "\n")
+	} else {
+		b.WriteString(headerTitle.Render(left))
+		b.WriteString(headerBar.Render(strings.Repeat(" ", fill)))
+		b.WriteString(headerMeta.Render(right) + "\n")
+	}
+	line := makeLine(width, '-')
+	if line != "" {
+		writeWrapped(b, headerBar, line, width)
+	}
 }
 
 func (m *model) toggleSelection(index int) {
