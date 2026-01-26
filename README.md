@@ -13,14 +13,21 @@ A small, fast TUI for running Terraform `plan` and `apply` with optional targets
 - Go 1.22+
 - Terraform in your `PATH`
 
-## Install
-```sh
-go build -o tfz .
-```
+## Download
+
+Go to release page and download binary.
 
 ## Run
 ```sh
-./tfz
+mv tfz /usr/local/bin/
+```
+
+## If you get an error on mac
+
+Remove extention attributes for mac from the binary.
+
+```sh
+xattr -rc tfz
 ```
 
 ## Usage
