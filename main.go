@@ -35,8 +35,11 @@ type model struct {
 	action       string
 	note         string
 	width        int
+	height       int
 	filter       string
 	filtered     []int
+	targetOffset int
+	actionOffset int
 }
 
 var (
@@ -73,6 +76,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
+		switch m.step {
+		case stepTargets:
+			m.ensureTargetVisible()
+		case stepAction:
+			m.ensureActionVisible()
+		}
 	}
 	return m, nil
 }
@@ -80,13 +90,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m model) updateTargets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.moveTargetCursor(-1)
 	case "down", "j":
-		if m.cursor < len(m.targets)-1 {
-			m.cursor++
-		}
+		m.moveTargetCursor(1)
 	case " ":
 		m.toggleSelection(m.cursor)
 	case "enter":
@@ -95,6 +101,7 @@ func (m model) updateTargets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.step = stepAction
 		m.cursor = 0
+		m.actionOffset = 0
 	case "backspace":
 		if len(m.filter) > 0 {
 			m.filter = m.filter[:len(m.filter)-1]
@@ -106,6 +113,7 @@ func (m model) updateTargets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.rebuildFilter()
 		}
 	}
+	m.ensureTargetVisible()
 	return m, nil
 }
 
@@ -123,6 +131,7 @@ func (m model) updateAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.action = actions[m.actionCursor]
 		return m, tea.Quit
 	}
+	m.ensureActionVisible()
 	return m, nil
 }
 
@@ -140,6 +149,7 @@ func (m model) View() string {
 func (m model) viewTargets() string {
 	var b strings.Builder
 	inner := m.innerWidth()
+	height := m.currentHeight()
 	writeHeader(&b, inner, "TARGET SELECTOR")
 	writeWrapped(&b, filterStyle, fmt.Sprintf("FILTER: %s", m.filter), inner)
 	b.WriteString("\n")
@@ -150,6 +160,7 @@ func (m model) viewTargets() string {
 			indexes[i] = i
 		}
 	}
+	var lines []string
 	for _, i := range indexes {
 		item := m.targets[i]
 		cursorPlain := " "
@@ -177,7 +188,7 @@ func (m model) viewTargets() string {
 				if m.cursor == i {
 					out = activeStyle.Render(out)
 				}
-				b.WriteString(out + "\n")
+				lines = append(lines, out)
 				continue
 			}
 			indent := strings.Repeat(" ", prefixLen)
@@ -185,8 +196,23 @@ func (m model) viewTargets() string {
 			if m.cursor == i {
 				out = activeStyle.Render(out)
 			}
-			b.WriteString(out + "\n")
+			lines = append(lines, out)
 		}
+	}
+	if height > 0 {
+		visible, showNote := m.targetVisibleRows(inner, height)
+		start, end := clampSlice(m.targetOffset, visible, len(lines))
+		for _, line := range lines[start:end] {
+			b.WriteString(line + "\n")
+		}
+		if showNote {
+			b.WriteString("\n")
+			writeWrapped(&b, noteStyle, m.note, inner)
+		}
+		return padToHeight(b.String(), height)
+	}
+	for _, line := range lines {
+		b.WriteString(line + "\n")
 	}
 	if m.note != "" {
 		b.WriteString("\n")
@@ -198,8 +224,10 @@ func (m model) viewTargets() string {
 func (m model) viewAction() string {
 	var b strings.Builder
 	inner := m.innerWidth()
+	height := m.currentHeight()
 	writeHeader(&b, inner, "ACTION SELECTOR")
 	b.WriteString("\n")
+	var lines []string
 	for i, item := range actions {
 		cursorPlain := " "
 		cursorStyled := " "
@@ -220,7 +248,7 @@ func (m model) viewAction() string {
 				if m.actionCursor == i {
 					out = activeStyle.Render(out)
 				}
-				b.WriteString(out + "\n")
+				lines = append(lines, out)
 				continue
 			}
 			indent := strings.Repeat(" ", prefixLen)
@@ -228,8 +256,19 @@ func (m model) viewAction() string {
 			if m.actionCursor == i {
 				out = activeStyle.Render(out)
 			}
-			b.WriteString(out + "\n")
+			lines = append(lines, out)
 		}
+	}
+	if height > 0 {
+		visible := m.actionVisibleRows(height)
+		start, end := clampSlice(m.actionOffset, visible, len(lines))
+		for _, line := range lines[start:end] {
+			b.WriteString(line + "\n")
+		}
+		return padToHeight(b.String(), height)
+	}
+	for _, line := range lines {
+		b.WriteString(line + "\n")
 	}
 	return b.String()
 }
@@ -251,6 +290,17 @@ func (m model) currentWidth() int {
 		return 0
 	}
 	return width
+}
+
+func (m model) currentHeight() int {
+	if m.height > 0 {
+		return m.height
+	}
+	_, height, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 0
+	}
+	return height
 }
 
 func (m *model) rebuildFilter() {
@@ -277,6 +327,217 @@ func (m *model) rebuildFilter() {
 	}
 	if !valid {
 		m.cursor = m.filtered[0]
+	}
+}
+
+func (m model) targetIndexes() []int {
+	if len(m.filtered) == 0 {
+		indexes := make([]int, len(m.targets))
+		for i := range m.targets {
+			indexes[i] = i
+		}
+		return indexes
+	}
+	return m.filtered
+}
+
+func (m *model) moveTargetCursor(delta int) {
+	indexes := m.targetIndexes()
+	if len(indexes) == 0 {
+		return
+	}
+	pos := 0
+	found := false
+	for i, idx := range indexes {
+		if idx == m.cursor {
+			pos = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		pos = 0
+	}
+	next := pos + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(indexes) {
+		next = len(indexes) - 1
+	}
+	m.cursor = indexes[next]
+}
+
+func (m model) targetLabelWidth(inner int) int {
+	prefixPlain := fmt.Sprintf("%s %s ", ">", "[ ]")
+	prefixLen := len([]rune(prefixPlain))
+	labelWidth := inner - prefixLen
+	if labelWidth < 1 {
+		labelWidth = 1
+	}
+	return labelWidth
+}
+
+func (m model) targetCursorLine(inner int, indexes []int) (int, int) {
+	line := 0
+	labelWidth := m.targetLabelWidth(inner)
+	for _, i := range indexes {
+		item := m.targets[i]
+		lines := wrapLines(item.Label, labelWidth)
+		if i == m.cursor {
+			if len(lines) == 0 {
+				return line, 1
+			}
+			return line, len(lines)
+		}
+		line += len(lines)
+	}
+	return 0, 1
+}
+
+func (m model) targetTotalLines(inner int, indexes []int) int {
+	total := 0
+	labelWidth := m.targetLabelWidth(inner)
+	for _, i := range indexes {
+		total += len(wrapLines(m.targets[i].Label, labelWidth))
+	}
+	return total
+}
+
+func (m model) targetVisibleRows(inner int, height int) (int, bool) {
+	if height <= 0 {
+		return 0, false
+	}
+	headerLines := 2
+	filterLines := len(wrapLines(fmt.Sprintf("FILTER: %s", m.filter), inner))
+	blank := 1
+	noteLines := 0
+	showNote := m.note != ""
+	if showNote {
+		noteLines = 1 + len(wrapLines(m.note, inner))
+	}
+	available := height - headerLines - filterLines - blank - noteLines
+	if available < 1 && showNote {
+		showNote = false
+		noteLines = 0
+		available = height - headerLines - filterLines - blank
+	}
+	if available < 1 {
+		available = 1
+	}
+	return available, showNote
+}
+
+func (m *model) ensureTargetVisible() {
+	inner := m.innerWidth()
+	height := m.currentHeight()
+	if height <= 0 {
+		return
+	}
+	indexes := m.targetIndexes()
+	total := m.targetTotalLines(inner, indexes)
+	visible, _ := m.targetVisibleRows(inner, height)
+	if total <= 0 || visible <= 0 {
+		m.targetOffset = 0
+		return
+	}
+	maxOffset := total - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.targetOffset > maxOffset {
+		m.targetOffset = maxOffset
+	}
+	cursorLine, _ := m.targetCursorLine(inner, indexes)
+	if cursorLine < m.targetOffset {
+		m.targetOffset = cursorLine
+		return
+	}
+	if cursorLine >= m.targetOffset+visible {
+		m.targetOffset = cursorLine - visible + 1
+		if m.targetOffset < 0 {
+			m.targetOffset = 0
+		}
+	}
+}
+
+func (m model) actionLabelWidth(inner int) int {
+	prefixPlain := fmt.Sprintf("%s ", ">")
+	prefixLen := len([]rune(prefixPlain))
+	labelWidth := inner - prefixLen
+	if labelWidth < 1 {
+		labelWidth = 1
+	}
+	return labelWidth
+}
+
+func (m model) actionCursorLine(inner int) int {
+	line := 0
+	labelWidth := m.actionLabelWidth(inner)
+	for i, item := range actions {
+		lines := wrapLines(item, labelWidth)
+		if i == m.actionCursor {
+			if len(lines) == 0 {
+				return line
+			}
+			return line
+		}
+		line += len(lines)
+	}
+	return 0
+}
+
+func (m model) actionTotalLines(inner int) int {
+	total := 0
+	labelWidth := m.actionLabelWidth(inner)
+	for _, item := range actions {
+		total += len(wrapLines(item, labelWidth))
+	}
+	return total
+}
+
+func (m model) actionVisibleRows(height int) int {
+	if height <= 0 {
+		return 0
+	}
+	headerLines := 2
+	blank := 1
+	available := height - headerLines - blank
+	if available < 1 {
+		available = 1
+	}
+	return available
+}
+
+func (m *model) ensureActionVisible() {
+	inner := m.innerWidth()
+	height := m.currentHeight()
+	if height <= 0 {
+		return
+	}
+	total := m.actionTotalLines(inner)
+	visible := m.actionVisibleRows(height)
+	if total <= 0 || visible <= 0 {
+		m.actionOffset = 0
+		return
+	}
+	maxOffset := total - visible
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.actionOffset > maxOffset {
+		m.actionOffset = maxOffset
+	}
+	cursorLine := m.actionCursorLine(inner)
+	if cursorLine < m.actionOffset {
+		m.actionOffset = cursorLine
+		return
+	}
+	if cursorLine >= m.actionOffset+visible {
+		m.actionOffset = cursorLine - visible + 1
+		if m.actionOffset < 0 {
+			m.actionOffset = 0
+		}
 	}
 }
 
@@ -330,6 +591,34 @@ func wrapLines(text string, width int) []string {
 	return out
 }
 
+func clampSlice(offset int, visible int, total int) (int, int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if visible <= 0 || offset >= total {
+		return 0, total
+	}
+	end := offset + visible
+	if end > total {
+		end = total
+	}
+	return offset, end
+}
+
+func padToHeight(out string, height int) string {
+	if height <= 0 {
+		return out
+	}
+	lines := strings.Count(out, "\n")
+	if lines >= height {
+		return out
+	}
+	return out + strings.Repeat("\n", height-lines)
+}
+
 func makeLine(width int, ch byte) string {
 	if width <= 0 {
 		return ""
@@ -355,10 +644,6 @@ func writeHeader(b *strings.Builder, width int, subtitle string) {
 		b.WriteString(headerTitle.Render(left))
 		b.WriteString(headerBar.Render(strings.Repeat(" ", fill)))
 		b.WriteString(headerMeta.Render(right) + "\n")
-	}
-	line := makeLine(width, '-')
-	if line != "" {
-		writeWrapped(b, headerBar, line, width)
 	}
 }
 
@@ -430,10 +715,6 @@ func main() {
 	}
 
 	note := ""
-	if len(targets) == 0 {
-		note = "No .tf targets found; selecting 'all' will run without -target."
-	}
-
 	m := model{
 		step:    stepTargets,
 		targets: items,
