@@ -265,7 +265,8 @@ func (m model) viewAction() string {
 		for _, line := range lines[start:end] {
 			b.WriteString(line + "\n")
 		}
-		return padToHeight(b.String(), height)
+		b.WriteString("\n")
+		return b.String()
 	}
 	for _, line := range lines {
 		b.WriteString(line + "\n")
@@ -501,8 +502,7 @@ func (m model) actionVisibleRows(height int) int {
 		return 0
 	}
 	headerLines := 2
-	blank := 1
-	available := height - headerLines - blank
+	available := height - headerLines
 	if available < 1 {
 		available = 1
 	}
