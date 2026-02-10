@@ -8,6 +8,8 @@ builds:
     binary: tfz
     env:
       - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
     goos:
       - linux
       - darwin
@@ -36,3 +38,26 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+
+brews:
+  - name: tfz
+    directory: Formula
+    repository:
+      owner: inamuu
+      # Homebrew tap repo: `brew install inamuu/tap/tfz` -> `inamuu/homebrew-tap`
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    homepage: "https://github.com/inamuu/tfz"
+    description: "A small, fast TUI for running Terraform plan/apply with optional targets."
+    license: "MIT"
+    skip_upload: "{{ .IsSnapshot }}"
+    caveats: |
+      `tfz` needs Terraform in your PATH.
+    install: |
+      bin.install "tfz"
+    test: |
+      system "#{bin}/tfz", "--version"
