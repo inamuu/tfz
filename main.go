@@ -101,12 +101,19 @@ func (m model) updateTargets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveTargetCursor(1)
 	case " ":
 		m.toggleSelection(m.cursor)
+		if m.hasSelection() && m.note != "" {
+			m.note = ""
+		}
 	case "enter":
 		if !m.hasSelection() {
-			m.selectAllOnly()
+			m.note = "Select at least one target (or 'all') with Space."
+			m.ensureTargetVisible()
+			return m, nil
 		}
+		m.note = ""
 		m.step = stepAction
 		m.cursor = 0
+		m.actionCursor = 0
 		m.actionOffset = 0
 	case "backspace":
 		if len(m.filter) > 0 {
