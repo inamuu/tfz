@@ -19,10 +19,10 @@ Go to release page and download binary.
 
 ## Install (Homebrew)
 
-After the next release tag is published, Homebrew Formula will be available in this repo.
+After the next release tag is published, Homebrew Formula will be available via the `inamuu/tap` tap.
 
 ```sh
-brew install inamuu/tfz/tfz
+brew install inamuu/tap/tfz
 ```
 
 ## Run
