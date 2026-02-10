@@ -17,6 +17,14 @@ A small, fast TUI for running Terraform `plan` and `apply` with optional targets
 
 Go to release page and download binary.
 
+## Install (Homebrew)
+
+After the next release tag is published, Homebrew Formula will be available in this repo.
+
+```sh
+brew install inamuu/tfz/tfz
+```
+
 ## Run
 ```sh
 mv tfz /usr/local/bin/

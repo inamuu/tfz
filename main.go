@@ -56,6 +56,12 @@ var (
 	activeStyle  = lipgloss.NewStyle().Background(lipgloss.Color("#3B3F52"))
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func (m model) Init() tea.Cmd {
 	return nil
 }
@@ -702,6 +708,17 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-h", "--help", "help":
+			fmt.Print(helpString())
+			return
+		case "-v", "--version", "version":
+			fmt.Println(versionString())
+			return
+		}
+	}
+
 	targets, err := findTargets(".")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -750,6 +767,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func versionString() string {
+	v := version
+	if v != "" && v != "dev" && !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	out := "tfz " + v
+	if commit != "" && commit != "none" {
+		out += " (" + commit + ")"
+	}
+	if date != "" && date != "unknown" {
+		out += " " + date
+	}
+	return out
+}
+
+func helpString() string {
+	return `tfz - A small, fast TUI for running Terraform plan/apply with optional targets.
+
+Usage:
+  tfz
+
+Options:
+  -h, --help     Show this help
+  -v, --version  Print version
+`
 }
 
 func findTargets(dir string) ([]string, error) {
