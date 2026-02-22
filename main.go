@@ -95,9 +95,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateTargets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "up", "k":
+	case "up":
 		m.moveTargetCursor(-1)
-	case "down", "j":
+	case "down":
 		m.moveTargetCursor(1)
 	case " ":
 		m.toggleSelection(m.cursor)
@@ -132,11 +132,11 @@ func (m model) updateTargets(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) updateAction(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "up", "k":
+	case "up":
 		if m.actionCursor > 0 {
 			m.actionCursor--
 		}
-	case "down", "j":
+	case "down":
 		if m.actionCursor < len(actions)-1 {
 			m.actionCursor++
 		}
