@@ -42,6 +42,7 @@ xattr -rc tfz
 1. Type to filter the target list.
 2. Press `Space` to toggle targets.
 3. Press `Enter` to confirm, then choose `plan` or `apply`.
+4. Press `Esc` to exit.
 
 Notes:
 - Selecting `all` ignores any other target selection and runs without `-target`.
