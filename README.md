@@ -4,6 +4,7 @@ A small, fast TUI for running Terraform `plan` and `apply` with optional targets
 
 ## Features
 - Scans `.tf` files in the current directory and lists `module` / `resource` targets
+- Optional `git diff` mode to narrow targets to changed `module` / `resource` blocks
 - Multi-select targets (fzf-style filtering)
 - `all` option runs Terraform without `-target`
 - Choose `plan` or `apply` after selecting targets
@@ -39,6 +40,10 @@ xattr -rc tfz
 ```
 
 ## Usage
+```sh
+tfz --git-diff
+```
+
 1. Type to filter the target list.
 2. Press `Space` to toggle targets.
 3. Press `Enter` to confirm, then choose `plan` or `apply`.
@@ -47,6 +52,7 @@ xattr -rc tfz
 Notes:
 - Selecting `all` ignores any other target selection and runs without `-target`.
 - If nothing is selected, `all` is chosen by default.
+- `-g`, `--git-diff` limits the target list to blocks affected by `git diff`.
 
 ## Screenshots
 Main

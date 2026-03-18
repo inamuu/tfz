@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -709,24 +710,37 @@ func (m model) selectedTargets() []string {
 var (
 	reModule  = regexp.MustCompile(`^\s*module\s+"([^"]+)"`)
 	reRes     = regexp.MustCompile(`^\s*resource\s+"([^"]+)"\s+"([^"]+)"`)
+	reHunk    = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 	actions   = []string{"plan", "apply"}
 	tfExt     = ".tf"
 	allTarget = "all"
 )
 
+type options struct {
+	gitDiff bool
+}
+
+type blockTarget struct {
+	label string
+	start int
+	end   int
+}
+
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "-h", "--help", "help":
-			fmt.Print(helpString())
-			return
-		case "-v", "--version", "version":
-			fmt.Println(versionString())
-			return
-		}
+	opts, err := parseOptions(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 
 	targets, err := findTargets(".")
+	note := ""
+	if opts.gitDiff {
+		targets, err = findTargetsFromGitDiff(".")
+		if err == nil {
+			note = "Targets are limited to changes detected by git diff."
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -738,7 +752,6 @@ func main() {
 		items = append(items, targetItem{Label: t})
 	}
 
-	note := ""
 	m := model{
 		step:    stepTargets,
 		targets: items,
@@ -798,13 +811,33 @@ Usage:
   tfz
 
 Options:
+  -g, --git-diff Limit targets to resource/module blocks affected by git diff
   -h, --help     Show this help
   -v, --version  Print version
 `
 }
 
+func parseOptions(args []string) (options, error) {
+	var opts options
+	for _, arg := range args {
+		switch arg {
+		case "-g", "--git-diff":
+			opts.gitDiff = true
+		case "-h", "--help", "help":
+			fmt.Print(helpString())
+			os.Exit(0)
+		case "-v", "--version", "version":
+			fmt.Println(versionString())
+			os.Exit(0)
+		default:
+			return options{}, fmt.Errorf("unknown option: %s", arg)
+		}
+	}
+	return opts, nil
+}
+
 func findTargets(dir string) ([]string, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*"+tfExt))
+	matches, err := terraformFiles(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -825,6 +858,274 @@ func findTargets(dir string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+func terraformFiles(dir string) ([]string, error) {
+	var matches []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) == tfExt {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(matches)
+	return matches, nil
+}
+
+func findTargetsFromGitDiff(dir string) ([]string, error) {
+	repoRoot, err := gitRepoRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	diff, err := gitDiff(dir)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(diff) == "" {
+		return nil, fmt.Errorf("no Terraform changes found in git diff")
+	}
+
+	changedLines, explicitTargets, err := parseGitDiff(diff)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := explicitTargets
+	for relPath, lines := range changedLines {
+		path := filepath.Join(repoRoot, relPath)
+		targets, err := targetsForLines(path, lines)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		for _, target := range targets {
+			seen[target] = struct{}{}
+		}
+	}
+
+	if len(seen) == 0 {
+		return nil, fmt.Errorf("no changed Terraform resource/module targets found in git diff")
+	}
+
+	out := make([]string, 0, len(seen))
+	for target := range seen {
+		out = append(out, target)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func gitDiff(dir string) (string, error) {
+	cmd := exec.Command("git", "diff", "--unified=0", "--no-color", "--", ".")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+func gitRepoRoot(dir string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func parseGitDiff(diff string) (map[string]map[int]struct{}, map[string]struct{}, error) {
+	changedLines := make(map[string]map[int]struct{})
+	explicitTargets := make(map[string]struct{})
+
+	var currentPath string
+	var newLine int
+	inHunk := false
+
+	scanner := bufio.NewScanner(strings.NewReader(diff))
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "+++ "):
+			currentPath = parseDiffPath(strings.TrimPrefix(line, "+++ "))
+			if filepath.Ext(currentPath) != tfExt {
+				currentPath = ""
+			}
+			inHunk = false
+		case strings.HasPrefix(line, "@@ "):
+			start, err := parseHunkStart(line)
+			if err != nil {
+				return nil, nil, err
+			}
+			newLine = start
+			inHunk = true
+		case !inHunk:
+			continue
+		case strings.HasPrefix(line, "diff --git "), strings.HasPrefix(line, "index "), strings.HasPrefix(line, "--- "):
+			inHunk = false
+		case strings.HasPrefix(line, "+"):
+			if currentPath != "" {
+				addChangedLine(changedLines, currentPath, newLine)
+			}
+			newLine++
+		case strings.HasPrefix(line, "-"):
+			if target := parseTargetLine(strings.TrimPrefix(line, "-")); target != "" {
+				explicitTargets[target] = struct{}{}
+			}
+			if currentPath != "" {
+				if newLine > 1 {
+					addChangedLine(changedLines, currentPath, newLine-1)
+				}
+				addChangedLine(changedLines, currentPath, newLine)
+			}
+		default:
+			newLine++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, err
+	}
+	return changedLines, explicitTargets, nil
+}
+
+func parseDiffPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "/dev/null" {
+		return ""
+	}
+	raw = strings.TrimPrefix(raw, "b/")
+	raw = strings.TrimPrefix(raw, "a/")
+	return raw
+}
+
+func parseHunkStart(line string) (int, error) {
+	match := reHunk.FindStringSubmatch(line)
+	if match == nil {
+		return 0, fmt.Errorf("invalid git diff hunk header: %s", line)
+	}
+	start, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0, err
+	}
+	return start, nil
+}
+
+func addChangedLine(changed map[string]map[int]struct{}, path string, line int) {
+	if line < 1 {
+		line = 1
+	}
+	if _, ok := changed[path]; !ok {
+		changed[path] = make(map[int]struct{})
+	}
+	changed[path][line] = struct{}{}
+}
+
+func parseTargetLine(line string) string {
+	line = strings.TrimSpace(line)
+	if match := reModule.FindStringSubmatch(line); match != nil {
+		return "module." + match[1]
+	}
+	if match := reRes.FindStringSubmatch(line); match != nil {
+		return "resource." + match[1] + "." + match[2]
+	}
+	return ""
+}
+
+func targetsForLines(path string, changedLines map[int]struct{}) ([]string, error) {
+	blocks, err := parseBlocks(path)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{})
+	for _, block := range blocks {
+		for line := range changedLines {
+			if line >= block.start && line <= block.end {
+				seen[block.label] = struct{}{}
+				break
+			}
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for target := range seen {
+		out = append(out, target)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func parseBlocks(path string) ([]blockTarget, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var (
+		blocks []blockTarget
+		active *blockTarget
+		depth  int
+		lineNo int
+	)
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lineNo++
+		line := scanner.Text()
+
+		if active == nil {
+			if target := parseTargetLine(line); target != "" {
+				block := blockTarget{label: target, start: lineNo, end: lineNo}
+				active = &block
+				depth = braceDelta(line)
+				if depth <= 0 {
+					active.end = lineNo
+					blocks = append(blocks, *active)
+					active = nil
+					depth = 0
+				}
+				continue
+			}
+			continue
+		}
+
+		depth += braceDelta(line)
+		active.end = lineNo
+		if depth <= 0 {
+			blocks = append(blocks, *active)
+			active = nil
+			depth = 0
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	if active != nil {
+		blocks = append(blocks, *active)
+	}
+	return blocks, nil
+}
+
+func braceDelta(line string) int {
+	return strings.Count(line, "{") - strings.Count(line, "}")
 }
 
 func collectTargets(path string, seen map[string]struct{}) error {
